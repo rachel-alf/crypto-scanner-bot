@@ -1,0 +1,22 @@
+{
+  "trailingComma": "es5",
+  "semi": true,
+  "tabWidth": 2,
+  "singleQuote": true,
+  "jsxSingleQuote": true,
+  "plugins": [
+    "@ianvs/prettier-plugin-sort-imports"
+  ],
+  "importOrder": [
+    "^(react/(.*)$)|^(react$)",
+    "",
+    "<THIRD_PARTY_MODULES>",
+    "",
+    "^[.]",
+    "",
+    "^(?!.*[.]css$)[./].*$",
+    ".css$"
+  ],
+  "importOrderSeparation": true,
+  "importOrderSortSpecifiers": true
+}

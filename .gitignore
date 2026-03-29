@@ -1,0 +1,73 @@
+# =========================
+# Node / TypeScript
+# =========================
+node_modules/
+dist/
+*.tsbuildinfo
+
+# =========================
+# Environment / secrets
+# =========================
+.env
+.env.*
+*.key
+*.pem
+
+# =========================
+# Logs
+# =========================
+logs/
+logs/**
+
+# =========================
+# Runtime bot state (CRITICAL)
+# =========================
+bot-state.json
+bot-state-legacy.json
+bot-state-legacy.json.backup
+cspell.json
+bot-state.json.backup
+bot_state.json
+bot_stats.json
+trades.json
+
+# =========================
+# Persistent runtime folders
+# =========================
+states/
+states/**
+data/
+data/**
+
+# =========================
+# Generated signals / outputs
+# =========================
+signals/futures-signals.json
+signals/futures-legacy-signals.json
+signals/scanner-output.json
+signals/signal-state.json
+signals/legacy-signal-state.json
+signals/spot-signals.json
+
+# If ALL signals are generated, use instead:
+# signals/
+
+# =========================
+# Test artifacts
+# =========================
+states/test/
+logs/test/
+
+# =========================
+# OS / Editor junk
+# =========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+
+# Runtime state
+state/
+states/
+data/

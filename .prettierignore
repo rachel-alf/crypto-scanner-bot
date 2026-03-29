@@ -1,0 +1,5 @@
+# Ignore log files with JSONL format
+trades.json
+positions.json
+signals.json
+*.log
