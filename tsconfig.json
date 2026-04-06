@@ -12,6 +12,7 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
     "skipLibCheck": true,
     "outDir": "./dist",
     // "rootDir": "./src",
@@ -19,7 +20,7 @@
     "isolatedModules": true,
     // For nodejs:
     // "lib": ["esnext"],
-    // "types": ["node"],
+    "types": ["node"],
     // and npm install -D @types/node
     // "baseUrl": ".",
     "paths": {
@@ -58,6 +59,12 @@
     "moduleDetection": "force",
     "skipLibCheck": true
   },
-  "include": ["src/**/*", "lib/**/*"],
+  "include": [
+    "src/**/*.ts",
+    "lib/**/*.ts",
+    "src/**/*.tsx",
+    "lib/**/*.tsx",
+    "eslint.config.mts"
+  ],
   "exclude": ["node_modules", "dist"]
 }

@@ -35,6 +35,7 @@ import {
   type FormattedSignalOutput,
   type Indicators,
   type LiquidityLevel,
+  type QuantMetrics,
   type SMCAnalysis,
   type StrategyId,
   type TrendAnalysis,
@@ -587,6 +588,178 @@ function calculatePremiumDiscount(
   return 'EQUILIBRIUM';
 }
 
+// ============================================================================
+// QUANTITATIVE ANALYSIS
+// ============================================================================
+
+function calculateZScore(values: number[], period: number = 20): number {
+  if (values.length < period) return 0;
+  const window = values.slice(-period);
+  const mean = window.reduce((a, b) => a + b, 0) / period;
+  const variance = window.reduce((sum, v) => sum + (v - mean) ** 2, 0) / period;
+  const stdDev = Math.sqrt(variance);
+  if (stdDev === 0) return 0;
+  const current = values[values.length - 1] as number;
+  return (current - mean) / stdDev;
+}
+
+function calculatePercentileRank(
+  values: number[],
+  lookback: number = 50
+): number {
+  if (values.length < 2) return 50;
+  const window = values.slice(-lookback);
+  const current = window[window.length - 1] as number;
+  const below = window.filter((v) => v < current).length;
+  return (below / (window.length - 1)) * 100;
+}
+
+function calculateHistoricalVolatility(
+  closes: number[],
+  period: number = 20
+): number {
+  if (closes.length < period + 1) return 0;
+  const logReturns: number[] = [];
+  for (let i = closes.length - period; i < closes.length; i++) {
+    const prev = closes[i - 1] as number;
+    const curr = closes[i] as number;
+    if (prev > 0) logReturns.push(Math.log(curr / prev));
+  }
+  if (logReturns.length === 0) return 0;
+  const mean = logReturns.reduce((a, b) => a + b, 0) / logReturns.length;
+  const variance =
+    logReturns.reduce((sum, r) => sum + (r - mean) ** 2, 0) / logReturns.length;
+  // Annualized: assume 1-min candles → 525 600 candles/year
+  return Math.sqrt(variance * 525_600) * 100;
+}
+
+export function calculateQuantScore(candles: CandleData): QuantMetrics {
+  const { closes } = candles;
+  const len = closes.length;
+
+  const empty: QuantMetrics = {
+    zScore: 0,
+    percentileRank: 50,
+    meanDistance: 0,
+    historicalVol: 0,
+    momentum: 50,
+    overallScore: 0,
+    signal: 'NEUTRAL',
+  };
+
+  if (len < 50) return empty;
+
+  // 1. Z-Score (20-period rolling)
+  const zScore = calculateZScore(closes as number[], 20);
+
+  // 2. Percentile rank over 50 bars
+  const percentileRank = calculatePercentileRank(closes as number[], 50);
+
+  // 3. Mean distance from 20-period SMA
+  const mean20 =
+    (closes.slice(-20) as number[]).reduce((a, b) => a + b, 0) / 20;
+  const currentPrice = closes[len - 1] as number;
+  const meanDistance = ((currentPrice - mean20) / mean20) * 100;
+
+  // 4. Annualized realized volatility
+  const historicalVol = calculateHistoricalVolatility(closes as number[], 20);
+
+  // 5. Composite momentum: weighted blend of 5/10/20-bar ROC
+  const roc5 =
+    len >= 6
+      ? ((closes[len - 1]! - closes[len - 6]!) / closes[len - 6]!) * 100
+      : 0;
+  const roc10 =
+    len >= 11
+      ? ((closes[len - 1]! - closes[len - 11]!) / closes[len - 11]!) * 100
+      : 0;
+  const roc20 =
+    len >= 21
+      ? ((closes[len - 1]! - closes[len - 21]!) / closes[len - 21]!) * 100
+      : 0;
+  const momentum = Math.max(
+    0,
+    Math.min(100, 50 + (roc5 * 2 + roc10 * 1.5 + roc20) / 4.5)
+  );
+
+  // 6. Overall score — proportional to |z-score| deviation beyond 1σ
+  const overallScore = Math.min(100, Math.max(0, Math.abs(zScore) * 30));
+
+  // 7. Direction: extreme low → LONG, extreme high → SHORT
+  let signal: 'LONG' | 'SHORT' | 'NEUTRAL' = 'NEUTRAL';
+  if (zScore <= -1.5 && percentileRank < 30) signal = 'LONG';
+  else if (zScore >= 1.5 && percentileRank > 70) signal = 'SHORT';
+
+  return {
+    zScore,
+    percentileRank,
+    meanDistance,
+    historicalVol,
+    momentum,
+    overallScore,
+    signal,
+  };
+}
+
+function detectMeanReversion(
+  symbol: string,
+  indicators: Indicators,
+  candles: CandleData,
+  quant: QuantMetrics,
+  smc?: SMCAnalysis
+): EntrySignal | null {
+  const { rsi } = indicators;
+
+  // LONG: statistically oversold, not in SMC premium, RSI not extreme low
+  if (
+    quant.signal === 'LONG' &&
+    quant.zScore <= -2.0 &&
+    quant.percentileRank < 20 &&
+    rsi > 20 &&
+    rsi < 55 &&
+    (!smc || smc.premiumDiscount !== 'PREMIUM')
+  ) {
+    const confidence = Math.min(
+      90,
+      55 + (Math.abs(quant.zScore) - 2) * 15 + quant.overallScore * 0.2
+    );
+    return {
+      symbol,
+      strategy: 'MEAN_REVERSION',
+      side: 'LONG',
+      reason: `Quant MR: Z=${quant.zScore.toFixed(2)} | Pct=${quant.percentileRank.toFixed(0)}% | Δmean=${quant.meanDistance.toFixed(2)}%`,
+      confidence,
+      timestamp: new Date(),
+    };
+  }
+
+  // SHORT: statistically overbought, not in SMC discount, RSI not extreme high
+  if (
+    quant.signal === 'SHORT' &&
+    quant.zScore >= 2.0 &&
+    quant.percentileRank > 80 &&
+    rsi > 50 &&
+    rsi < 80 &&
+    (!smc || smc.premiumDiscount !== 'DISCOUNT')
+  ) {
+    const confidence = Math.min(
+      90,
+      55 + (quant.zScore - 2) * 15 + quant.overallScore * 0.2
+    );
+    return {
+      symbol,
+      strategy: 'MEAN_REVERSION',
+      side: 'SHORT',
+      reason: `Quant MR: Z=${quant.zScore.toFixed(2)} | Pct=${quant.percentileRank.toFixed(0)}% | Δmean=+${Math.abs(quant.meanDistance).toFixed(2)}%`,
+      confidence,
+      timestamp: new Date(),
+    };
+  }
+
+  return null;
+}
+
+// ============================================================================
 function calculateSMCScore(smc: Omit<SMCAnalysis, 'smcScore'>): number {
   let score = 0;
 
@@ -1263,6 +1436,16 @@ function getStrategyWeights(strategy: string): ConfidenceWeights {
       smc: 1.0,
     },
 
+    // Mean reversion: RSI + volatility are key gauges
+    MEAN_REVERSION: {
+      rsi: 1.0,
+      trend: 0.3,
+      volume: 0.5,
+      volatility: 0.8,
+      momentum: 0.4,
+      smc: 0.4,
+    },
+
     // Default weights
     DEFAULT: {
       rsi: 0.8,
@@ -1288,6 +1471,7 @@ const MIN_CONFIDENCE = {
   FIB_RETRACEMENT: 70, // 🔥 Raise this if FIB is too common
   RSI_DIVERGENCE: 55,
   BREAKDOWN: 65,
+  MEAN_REVERSION: 60,
 };
 
 export function detectSignal(
@@ -2633,7 +2817,18 @@ export class TradingScanner {
 
       const regime = detectRegime(indicators, candles);
       const smc = SCAN_CONFIG.smcEnabled ? analyzeSMC(candles) : undefined;
-      const allSignals = detectSignal(symbol, indicators, candles, smc);
+      const quant = calculateQuantScore(candles);
+      const baseSignals = detectSignal(symbol, indicators, candles, smc);
+      const meanRevSignal = detectMeanReversion(
+        symbol,
+        indicators,
+        candles,
+        quant,
+        smc
+      );
+      const allSignals = meanRevSignal
+        ? [...baseSignals, meanRevSignal]
+        : baseSignals;
       // console.log(
       //   '🥑 ~ TradingScanner ~ scanSymbol ~ allSignals:',
       //   JSON.stringify(allSignals, null, 2)
@@ -3085,6 +3280,7 @@ export class TradingScanner {
         timestamp: new Date(),
         marketType,
         wyckoff: wyckoffPhase,
+        quant,
       };
 
       if (smc) {
@@ -3437,6 +3633,17 @@ export class TradingScanner {
             description: result.wyckoff.description,
           }
         : undefined,
+      ...(result.quant && {
+        quant: {
+          zScore: result.quant.zScore,
+          percentileRank: result.quant.percentileRank,
+          meanDistance: result.quant.meanDistance,
+          historicalVol: result.quant.historicalVol,
+          momentum: result.quant.momentum,
+          overallScore: result.quant.overallScore,
+          signal: result.quant.signal,
+        },
+      }),
     };
   }
 
@@ -3599,10 +3806,11 @@ export class TradingScanner {
         colorize('Trend', colors.bright),
         colorize('SMC', colors.bright),
         colorize('Zone', colors.bright),
+        colorize('Quant', colors.bright),
         colorize('Wyckoff', colors.bright),
         colorize('Status', colors.bright),
       ],
-      colWidths: [5, 12, 14, 10, 8, 8, 12, 10, 12, 15, 45],
+      colWidths: [5, 12, 14, 10, 8, 8, 12, 10, 12, 14, 15, 45],
       style: {
         head: [],
         border: ['gray'],
@@ -3774,6 +3982,24 @@ export class TradingScanner {
         );
       }
 
+      let quantText = colorize('─', colors.gray);
+      if (result.quant) {
+        const q = result.quant;
+        const zAbs = Math.abs(q.zScore);
+        const qColor =
+          zAbs >= 2.5
+            ? colors.brightMagenta
+            : zAbs >= 1.5
+              ? colors.brightYellow
+              : colors.gray;
+        const signalArrow =
+          q.signal === 'LONG' ? '▲' : q.signal === 'SHORT' ? '▼' : '─';
+        quantText = colorize(
+          `Z${q.zScore.toFixed(1)} P${q.percentileRank.toFixed(0)} ${signalArrow}`,
+          qColor
+        );
+      }
+
       table.push([
         rowNumber,
         symbolText,
@@ -3784,6 +4010,7 @@ export class TradingScanner {
         trendText,
         smcText,
         zoneText,
+        quantText,
         wyckoffText,
         statusText,
       ]);

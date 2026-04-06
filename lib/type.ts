@@ -722,6 +722,16 @@ export type FVG = {
   type?: 'BULLISH' | 'BEARISH';
 };
 
+export interface QuantMetrics {
+  zScore: number;
+  percentileRank: number;
+  meanDistance: number;
+  historicalVol: number;
+  momentum: number;
+  overallScore: number;
+  signal: 'LONG' | 'SHORT' | 'NEUTRAL';
+}
+
 export interface ExtendedScanResult {
   symbol: string;
   signal: EntrySignal | null;
@@ -735,6 +745,7 @@ export interface ExtendedScanResult {
   marketType?: BotType;
   reason?: string;
   wyckoff?: WyckoffPhase | null;
+  quant?: QuantMetrics;
   positionSize?: {
     // ✅ ADD if you don't have it
     quantity: number;
@@ -1176,6 +1187,15 @@ export interface FormattedSignalOutput {
   };
 
   wyckoff?: WyckoffPhase | undefined; // ✅ Add | undefined here too
+  quant?: {
+    zScore: number;
+    percentileRank: number;
+    meanDistance: number;
+    historicalVol: number;
+    momentum: number;
+    overallScore: number;
+    signal: 'LONG' | 'SHORT' | 'NEUTRAL';
+  };
 }
 
 export interface WyckoffPhase {
